@@ -20,6 +20,7 @@
 
   const DEFAULT_CODE =
 `#include <iostream>
+using namespace std;
 
 int square(int x) {
     int result = x * x;
@@ -29,18 +30,25 @@ int square(int x) {
 int main() {
     int a = 3;
     int b = square(a);
-    std::cout << "a = " << a << ", b = " << b << std::endl;
+    cout << "a = " << a << ", b = " << b << endl;
     return 0;
 }
 `;
 
+  // ---------------------------------------------------------------------
+  // Debug session state (all client-side, backed by the JSCPP interpreter)
+  // ---------------------------------------------------------------------
+
+  let mydebugger = null;   // JSCPP debugger instance
+  let outputBuf = "";      // accumulated stdout for the running session
+  let history = [];        // snapshots: { line, output, variables }
+  let finished = false;
   let sessionActive = false;
-  let historyLength = 0;
   let currentLine = null;
   let currentIsCrash = false;
 
   // ---------------------------------------------------------------------
-  // Editor: line numbers + syntax-free highlight overlay
+  // Editor: line numbers + highlight overlay
   // ---------------------------------------------------------------------
 
   function escapeHtml(s) {
@@ -132,145 +140,235 @@ int main() {
     consoleBody.classList.toggle("err-line", !!isError);
   }
 
-  function renderFrameHint(snapshot) {
-    if (!snapshot) { frameHint.textContent = "—"; return; }
-    const stackTop = (snapshot.stack && snapshot.stack[0]) || {};
-    frameHint.textContent = stackTop.func ? `in ${stackTop.func}()` : "—";
+  function renderFrameHint(text) {
+    frameHint.textContent = text || "—";
   }
 
   function updateButtons() {
-    btnStop.disabled = !sessionActive;
-    btnBack.disabled = !sessionActive || historyLength <= 1;
-    btnForward.disabled = !sessionActive || (sessionActive && window.__finished === true);
+    btnStop.disabled = !sessionActive && history.length === 0;
+    btnBack.disabled = history.length <= 1;
+    btnForward.disabled = !sessionActive || finished;
   }
 
-  function applySnapshot(snapshot, opts = {}) {
-    if (!snapshot) return;
-    currentLine = snapshot.line;
-    currentIsCrash = !!snapshot.crashed || snapshot.reason === "signal-received";
-    applyLineHighlight();
-    renderVariables(snapshot.variables);
-    renderFrameHint(snapshot);
-    renderConsole(snapshot.output, currentIsCrash);
-    stepHint.textContent = `step ${opts.historyLength ?? historyLength} / ${opts.historyLength ?? historyLength}`;
+  // ---------------------------------------------------------------------
+  // Pulling readable variable values out of JSCPP's debugger
+  // ---------------------------------------------------------------------
 
-    if (currentIsCrash) {
-      const sig = snapshot.signal_meaning || snapshot.signal_name || "runtime error";
-      setStatus("error", `Crashed: ${sig} (line ${snapshot.line})`);
-    } else {
-      setStatus("running", `Stopped at line ${snapshot.line}`);
+  function readVariables() {
+    if (!mydebugger || typeof mydebugger.variable !== "function") return {};
+    let raw;
+    try {
+      raw = mydebugger.variable();
+    } catch (e) {
+      return {};
+    }
+    if (!raw || typeof raw !== "object") return {};
+
+    const out = {};
+    for (const name of Object.keys(raw)) {
+      if (name === "this" || name.startsWith("__")) continue;
+      const entry = raw[name];
+      out[name] = stringifyValue(entry);
+    }
+    return out;
+  }
+
+  function stringifyValue(entry) {
+    try {
+      if (entry == null) return "null";
+      // JSCPP variable entries are typically { t: <type>, v: <value> }
+      if (typeof entry === "object" && "v" in entry) {
+        const v = entry.v;
+        if (v && typeof v === "object" && "value" in v) return String(v.value);
+        if (Array.isArray(v)) return "[" + v.map(stringifyValue).join(", ") + "]";
+        return String(v);
+      }
+      if (typeof entry === "object") return JSON.stringify(entry);
+      return String(entry);
+    } catch (e) {
+      return "?";
+    }
+  }
+
+  function currentFunctionName() {
+    try {
+      const node = mydebugger.nextNode ? mydebugger.nextNode() : null;
+      return node && node.sLine ? `near line ${node.sLine}` : "—";
+    } catch (e) {
+      return "—";
     }
   }
 
   // ---------------------------------------------------------------------
-  // API calls
+  // Snapshot / history (drives Step Back — a replay of recorded state,
+  // since true reverse execution isn't something the interpreter offers)
   // ---------------------------------------------------------------------
 
-  async function postJson(url, body) {
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body || {}),
-    });
-    let data = {};
-    try { data = await res.json(); } catch (_) { /* ignore */ }
-    return { ok: res.ok, status: res.status, data };
+  function pushSnapshot(line, crashed) {
+    const snap = {
+      line,
+      output: outputBuf,
+      variables: readVariables(),
+      frame: currentFunctionName(),
+      crashed: !!crashed,
+    };
+    history.push(snap);
+    return snap;
   }
 
-  function showCompileError(line, message) {
-    currentLine = line;
-    currentIsCrash = true;
+  function applySnapshot(snap) {
+    if (!snap) return;
+    currentLine = snap.line;
+    currentIsCrash = !!snap.crashed;
     applyLineHighlight();
-    renderConsole(message || "Compilation failed.", true);
-    setStatus("error", line ? `Compile error at line ${line}` : "Compile error");
+    renderVariables(snap.variables);
+    renderFrameHint(snap.frame);
+    renderConsole(snap.output, currentIsCrash);
+    stepHint.textContent = `step ${history.indexOf(snap) + 1} / ${history.length}`;
+
+    if (currentIsCrash) {
+      setStatus("error", `Crashed at line ${snap.line}`);
+    } else {
+      setStatus("running", `Stopped at line ${snap.line}`);
+    }
   }
 
-  async function runProgram() {
-    setStatus("running", "Compiling…");
-    renderConsole("Compiling…", false);
+  // ---------------------------------------------------------------------
+  // Run / Step controls
+  // ---------------------------------------------------------------------
+
+  function resetState() {
+    mydebugger = null;
+    outputBuf = "";
+    history = [];
+    finished = false;
+    sessionActive = false;
     currentLine = null;
     currentIsCrash = false;
-    applyLineHighlight();
+  }
 
-    btnRun.disabled = true;
-
-    const { ok, status, data } = await postJson("/api/run", { code: codeInput.value });
-
-    btnRun.disabled = false;
-
-    if (!ok) {
-      sessionActive = false;
-      historyLength = 0;
-      updateButtons();
-      if (data.error === "compile_error" || status === 400 && data.line !== undefined) {
-        showCompileError(data.line, data.message);
-      } else {
-        setStatus("error", data.error || "Run failed.");
-        renderConsole(data.error || "Run failed.", true);
-      }
+  function runProgram() {
+    if (typeof JSCPP === "undefined") {
+      setStatus("error", "Interpreter failed to load");
+      renderConsole(
+        "The JSCPP interpreter script didn't load (check your internet connection or the CDN link in index.html).",
+        true
+      );
       return;
     }
 
-    if (data.status === "finished") {
+    resetState();
+    applyLineHighlight();
+    renderVariables(null);
+    renderFrameHint(null);
+    stepHint.textContent = "step 0 / 0";
+    setStatus("running", "Starting…");
+    renderConsole("Running…", false);
+
+    const config = {
+      stdio: {
+        write: (s) => { outputBuf += s; },
+      },
+      debug: true,
+      unsigned_overflow: "ignore",
+    };
+
+    try {
+      mydebugger = JSCPP.run(codeInput.value, "", config);
+    } catch (err) {
       sessionActive = false;
-      historyLength = 0;
-      window.__finished = true;
+      finished = true;
       updateButtons();
-      setStatus("done", "Finished (no breakpoint hit)");
-      renderConsole(data.output || data.message || "Program finished.", false);
+      const msg = (err && err.message) ? err.message : String(err);
+      const lineMatch = /line[:\s]+(\d+)/i.exec(msg);
+      currentLine = lineMatch ? parseInt(lineMatch[1], 10) : null;
+      currentIsCrash = true;
+      applyLineHighlight();
+      setStatus("error", "Interpreter error");
+      renderConsole("Error: " + msg, true);
       return;
     }
 
     sessionActive = true;
-    historyLength = data.history_length || 1;
-    window.__finished = false;
+    finished = false;
     updateButtons();
-    applySnapshot(data.snapshot, { historyLength });
+
+    // Land on the first executable line.
+    advanceToNextStatement(true);
   }
 
-  async function stepForward() {
-    if (!sessionActive) return;
-    const { ok, data } = await postJson("/api/step", { direction: "forward" });
-    if (!ok) {
-      setStatus("error", data.error || "Step failed.");
-      return;
-    }
-    if (data.status === "finished") {
-      window.__finished = true;
-      sessionActive = true; // keep Step Back / Stop usable
+  function advanceToNextStatement(isFirstStep) {
+    if (!mydebugger) return;
+
+    try {
+      let node = null;
+      let done = false;
+
+      if (!isFirstStep) {
+        done = mydebugger.next();
+      }
+
+      if (done !== false && done !== undefined) {
+        finishRun(done);
+        return;
+      }
+
+      // Some breakpoints land between statements (e.g. entering a call);
+      // keep stepping until we have a concrete statement to show.
+      let guard = 0;
+      node = mydebugger.nextNode ? mydebugger.nextNode() : null;
+      while (node == null && guard < 200) {
+        done = mydebugger.next();
+        if (done !== false && done !== undefined) {
+          finishRun(done);
+          return;
+        }
+        node = mydebugger.nextNode ? mydebugger.nextNode() : null;
+        guard++;
+      }
+
+      const line = node ? node.sLine : currentLine;
+      const snap = pushSnapshot(line, false);
+      applySnapshot(snap);
       updateButtons();
-      setStatus("done", "Program finished");
-      renderConsole(data.output || "Program finished.", false);
-      currentLine = null;
-      currentIsCrash = false;
-      applyLineHighlight();
-      return;
+    } catch (err) {
+      finished = true;
+      sessionActive = true; // keep history/back available
+      const msg = (err && err.message) ? err.message : String(err);
+      const snap = pushSnapshot(currentLine, true);
+      snap.output = outputBuf + "\n\n[Runtime error] " + msg;
+      applySnapshot(snap);
+      updateButtons();
     }
-    historyLength = data.history_length || historyLength;
-    updateButtons();
-    applySnapshot(data.snapshot, { historyLength });
   }
 
-  async function stepBack() {
-    if (!sessionActive || historyLength <= 1) return;
-    const { ok, data } = await postJson("/api/step", { direction: "back" });
-    if (!ok) {
-      setStatus("error", data.error || "Step back failed.");
-      return;
-    }
-    window.__finished = false;
-    historyLength = data.history_length || historyLength;
+  function finishRun(done) {
+    finished = true;
+    sessionActive = true; // history + Step Back stay usable
     updateButtons();
-    if (data.snapshot) applySnapshot(data.snapshot, { historyLength });
+    const code = (done && typeof done === "object" && "v" in done) ? done.v : done;
+    setStatus("done", `Finished (exit code ${code})`);
+    const snap = pushSnapshot(currentLine, false);
+    snap.output = outputBuf + `\n\n[Program exited with code ${code}]`;
+    applySnapshot(snap);
   }
 
-  async function stopReset() {
-    await postJson("/api/reset", {});
-    sessionActive = false;
-    historyLength = 0;
-    window.__finished = false;
-    currentLine = null;
-    currentIsCrash = false;
+  function stepForward() {
+    if (!sessionActive || finished) return;
+    advanceToNextStatement(false);
+  }
+
+  function stepBack() {
+    if (history.length <= 1) return;
+    history.pop();
+    finished = false;
+    const snap = history[history.length - 1];
+    updateButtons();
+    applySnapshot(snap);
+  }
+
+  function stopReset() {
+    resetState();
     applyLineHighlight();
     renderVariables(null);
     renderFrameHint(null);
@@ -287,3 +385,4 @@ int main() {
 
   updateButtons();
 })();
+        
