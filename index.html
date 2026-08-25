@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>C++ StepView Pro</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-mark">&lt;/&gt;</span>
+    <span class="brand-name">C++ StepView <em>Pro</em></span>
+  </div>
+  <div class="topbar-status" id="topbarStatus">
+    <span class="dot" id="statusDot"></span>
+    <span id="statusText">Idle</span>
+  </div>
+</header>
+
+<main class="workspace">
+
+  <section class="pane pane-code">
+    <div class="pane-header">
+      <span>temp_code.cpp</span>
+      <span class="pane-header-hint">g++ -g -o temp_bin temp_code.cpp</span>
+    </div>
+    <div class="editor-shell">
+      <div class="gutter" id="gutter"></div>
+      <textarea id="codeInput" class="code-input" spellcheck="false" autocapitalize="off" autocomplete="off"></textarea>
+      <pre class="code-view" id="codeView" aria-hidden="true"><code id="codeViewInner"></code></pre>
+    </div>
+  </section>
+
+  <section class="pane pane-side">
+
+    <div class="pane pane-vars">
+      <div class="pane-header">
+        <span>Variables</span>
+        <span class="pane-header-hint" id="frameHint">&mdash;</span>
+      </div>
+      <div class="vars-body" id="varsBody">
+        <p class="empty-hint">Run your program to inspect local variables here.</p>
+      </div>
+    </div>
+
+    <div class="pane pane-console">
+      <div class="pane-header">
+        <span>Console Output</span>
+        <span class="pane-header-hint" id="stepHint">step 0 / 0</span>
+      </div>
+      <pre class="console-body" id="consoleBody">Ready. Paste C++ code and hit Run.</pre>
+    </div>
+
+  </section>
+
+</main>
+
+<div class="toolbar">
+  <button id="btnRun" class="tb-btn tb-run">
+    <span class="tb-icon">&#9654;</span><span>Run</span>
+  </button>
+  <button id="btnStop" class="tb-btn tb-stop" disabled>
+    <span class="tb-icon">&#9632;</span><span>Stop / Reset</span>
+  </button>
+  <button id="btnBack" class="tb-btn tb-back" disabled>
+    <span class="tb-icon">&#9194;</span><span>Step Back</span>
+  </button>
+  <button id="btnForward" class="tb-btn tb-forward" disabled>
+    <span class="tb-icon">&#9193;</span><span>Step Forward</span>
+  </button>
+</div>
+
+<script src="/static/script.js"></script>
+</body>
+</html>
