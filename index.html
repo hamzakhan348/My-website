@@ -3,10 +3,12 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>C++ StepView Pro</title>
+<title>C++ StepView Pro (Browser Edition)</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="style.css">
+<!-- JSCPP: an in-browser C++ interpreter (no server/compiler needed) -->
+<script src="https://cdn.jsdelivr.net/npm/JSCPP@2.0.9/dist/JSCPP.es5.min.js"></script>
 </head>
 <body>
 
@@ -21,12 +23,17 @@
   </div>
 </header>
 
+<div class="notice">
+  Browser edition — runs entirely on this page using a JavaScript C++ interpreter (<a href="https://github.com/felixhao28/JSCPP" target="_blank" rel="noopener">JSCPP</a>), no server involved.
+  It supports a practical subset of C++ (no classes/OOP, namespaces, or multi-file programs, and <code>cin</code> input isn't wired up). See the note at the bottom for details.
+</div>
+
 <main class="workspace">
 
   <section class="pane pane-code">
     <div class="pane-header">
-      <span>temp_code.cpp</span>
-      <span class="pane-header-hint">g++ -g -o temp_bin temp_code.cpp</span>
+      <span>main.cpp</span>
+      <span class="pane-header-hint">runs in-browser via JSCPP</span>
     </div>
     <div class="editor-shell">
       <div class="gutter" id="gutter"></div>
@@ -74,6 +81,6 @@
   </button>
 </div>
 
-<script src="/static/script.js"></script>
+<script src="script.js"></script>
 </body>
 </html>
